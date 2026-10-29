@@ -1,0 +1,6 @@
+{
+  "name": "Maya - Voice AI Companion",
+  "description": "Premium AI voice assistant and caring companion with real-time continuous voice-to-voice conversation, emotional intelligence, and modern Material 3 design.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

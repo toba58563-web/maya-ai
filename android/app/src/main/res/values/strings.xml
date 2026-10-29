@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Maya AI</string>
+    <string name="title_activity_main">Maya AI</string>
+    <string name="package_name">com.maya.ai.assistant</string>
+    <string name="custom_url_scheme">com.maya.ai.assistant</string>
+    <string name="accessibility_service_label">Maya AI Phone Assistant</string>
+    <string name="accessibility_service_description">Enables Maya AI to perform automated phone navigation, scroll screens, open apps, and type text based on your voice commands.</string>
+    <string name="notification_channel_name">Maya AI Phone Control</string>
+    <string name="notification_channel_desc">Shows active status of Maya AI background voice assistant and floating orb.</string>
+</resources>
