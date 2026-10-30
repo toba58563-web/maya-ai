@@ -54,12 +54,21 @@ export class GeminiLiveClient {
     this.callbacks = { ...this.callbacks, ...callbacks };
   }
 
-  public async connect(apiKey?: string): Promise<void> {
+  public async connect(
+    apiKey?: string,
+    voiceName?: string,
+    personality?: string
+  ): Promise<void> {
     this.disconnect();
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const query = apiKey ? `?apiKey=${encodeURIComponent(apiKey)}` : "";
-    const wsUrl = `${protocol}//${window.location.host}/live${query}`;
+    const params = new URLSearchParams();
+    if (apiKey) params.set("apiKey", apiKey);
+    if (voiceName) params.set("voice", voiceName);
+    if (personality) params.set("personality", personality);
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const wsUrl = `${protocol}//${window.location.host}/live${qs}`;
 
     this.callbacks.onStatusChange?.("connecting");
 

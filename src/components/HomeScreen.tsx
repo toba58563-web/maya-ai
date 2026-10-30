@@ -3,6 +3,10 @@ import {
   Menu,
   ShoppingBag,
   CloudSun,
+  Sun,
+  CloudRain,
+  Cloud,
+  Moon,
   ShieldCheck,
   Key,
   CheckCircle2,
@@ -11,18 +15,27 @@ import {
   Image as ImageIcon,
   Code2,
   FileText,
-  Play,
   AlertCircle,
   Smartphone,
+  RefreshCw,
 } from "lucide-react";
-import { AppSettings, UserProfile } from "../types";
+import { AppSettings, UserProfile, AssistantState, AssistantEmotion } from "../types";
 import { MayaPhoneControlBridge } from "../utils/mayaPhoneControl";
+import { RGBVisualizerOrb } from "./RGBVisualizerOrb";
+import { fetchLiveLocationWeather, WeatherData } from "../utils/weatherService";
 
 interface HomeScreenProps {
   settings: AppSettings;
   profile: UserProfile;
-  onStartMaya: () => void;
+  state: AssistantState;
+  emotion?: AssistantEmotion;
+  analyser?: AnalyserNode | null;
+  userSpeech?: string;
+  assistantSpeech?: string;
+  activeActionText?: string;
+  onToggleStartMaya: () => void;
   onOpenApiKeyModal: () => void;
+  onOpenPermissionsModal: () => void;
   onQuickAction: (actionPrompt: string) => void;
   onOpenSettings: () => void;
 }
@@ -30,17 +43,55 @@ interface HomeScreenProps {
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   settings,
   profile,
-  onStartMaya,
+  state,
+  emotion = "warm",
+  analyser,
+  userSpeech = "",
+  assistantSpeech = "",
+  activeActionText,
+  onToggleStartMaya,
   onOpenApiKeyModal,
+  onOpenPermissionsModal,
   onQuickAction,
   onOpenSettings,
 }) => {
-  const isKeyConfigured = Boolean(settings.customApiKey?.trim());
+  // Ready by default through server-side Gemini key with optional custom key override
+  const isKeyConfigured = true;
   const userName = profile.name || "Boss";
   const isNative = MayaPhoneControlBridge.isNative();
 
   const [accessibilityOk, setAccessibilityOk] = useState(false);
   const [overlayOk, setOverlayOk] = useState(false);
+
+  // Dynamic Location Weather State
+  const [weather, setWeather] = useState<WeatherData>({
+    city: "Detecting Location...",
+    temperature: 28,
+    condition: "Checking weather...",
+    icon: "cloud-sun",
+    isDay: true,
+    loading: true,
+  });
+
+  const loadWeather = async () => {
+    try {
+      const data = await fetchLiveLocationWeather();
+      setWeather(data);
+    } catch {
+      setWeather({
+        city: "Local",
+        temperature: 29,
+        condition: "Mostly Clear",
+        icon: "sun",
+        isDay: true,
+        loading: false,
+      });
+    }
+  };
+
+  useEffect(() => {
+    loadWeather();
+  }, []);
 
   useEffect(() => {
     if (isNative) {
@@ -49,33 +100,62 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     }
   }, [isNative]);
 
+  const renderWeatherIcon = () => {
+    if (weather.loading) {
+      return <RefreshCw className="w-4 h-4 text-sky-400 animate-spin" />;
+    }
+    if (weather.icon === "sun") {
+      return <Sun className="w-5 h-5 text-amber-400 animate-pulse" />;
+    }
+    if (weather.icon === "cloud-rain") {
+      return <CloudRain className="w-5 h-5 text-blue-400" />;
+    }
+    if (weather.icon === "cloud") {
+      return <Cloud className="w-5 h-5 text-slate-300" />;
+    }
+    if (!weather.isDay) {
+      return <Moon className="w-5 h-5 text-indigo-300" />;
+    }
+    return <CloudSun className="w-5 h-5 text-sky-400" />;
+  };
+
+  const isLive = state !== "offline";
+
   return (
-    <div className="w-full flex-1 flex flex-col justify-between px-5 pt-4 pb-24 overflow-y-auto max-w-md mx-auto">
+    <div className="w-full flex-1 flex flex-col justify-between px-5 pt-4 pb-28 overflow-y-auto max-w-md mx-auto select-none">
       {/* TOP HEADER SECTION */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={onOpenSettings}
             className="p-2.5 rounded-2xl bg-white/[0.04] border border-white/10 text-slate-300 hover:text-white transition-colors"
+            title="Open Menu"
           >
             <Menu className="w-5 h-5" />
           </button>
 
-          {/* Weather Widget (Top Right) */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md">
-            <CloudSun className="w-5 h-5 text-sky-400" />
+          {/* DYNAMIC REAL-LOCATION WEATHER WIDGET */}
+          <button
+            onClick={loadWeather}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 backdrop-blur-md transition-all text-right group cursor-pointer"
+            title="Tap to refresh live location weather"
+          >
+            {renderWeatherIcon()}
             <div className="text-right">
-              <div className="text-[10px] text-slate-400 flex items-center gap-0.5 justify-end">
-                <span>📍 Kolkata</span>
+              <div className="text-[10px] text-slate-400 flex items-center gap-0.5 justify-end group-hover:text-cyan-300 transition-colors">
+                <span>📍 {weather.city}</span>
               </div>
               <div className="text-xs font-bold text-white leading-tight">
-                31°C <span className="text-[10px] font-normal text-slate-300">Mostly Cloudy</span>
+                {weather.loading ? "..." : `${weather.temperature}°C`}{" "}
+                <span className="text-[10px] font-normal text-slate-300">
+                  {weather.condition}
+                </span>
               </div>
             </div>
-            <button className="p-1 rounded-lg text-slate-400 hover:text-white ml-1">
-              <ShoppingBag className="w-4 h-4" />
-            </button>
-          </div>
+            <div className="p-1 rounded-lg text-slate-400 hover:text-white ml-0.5">
+              <ShoppingBag className="w-3.5 h-3.5 opacity-60" />
+            </div>
+          </button>
         </div>
 
         {/* GREETING TITLE */}
@@ -88,15 +168,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </p>
         </div>
 
-        {/* DUAL STATUS CARDS (System & API Key) */}
+        {/* DUAL STATUS CARDS (System / Permissions & API Key) */}
         <div className="grid grid-cols-2 gap-3 mb-5">
-          {/* System / Permissions Card */}
+          {/* System & Permissions Card -> Opens Permissions Hub */}
           <button
-            onClick={onOpenSettings}
-            className="p-3.5 rounded-2xl bg-[#0f172a]/80 hover:bg-[#131f38] border border-white/10 text-left backdrop-blur-md flex flex-col justify-between shadow-sm transition-all"
+            onClick={onOpenPermissionsModal}
+            className="p-3.5 rounded-2xl bg-[#0f172a]/80 hover:bg-[#131f38] border border-white/10 text-left backdrop-blur-md flex flex-col justify-between shadow-sm transition-all group"
           >
             <div className="flex items-center justify-between mb-2">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform">
                 <ShieldCheck className="w-5 h-5" />
               </div>
               {accessibilityOk || !isNative ? (
@@ -107,18 +187,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
             <div>
               <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                <span>System</span>
+                <span>Permissions</span>
                 <span className="text-[10px] font-normal text-emerald-400">
-                  {accessibilityOk || !isNative ? "All Good" : "Setup Perms"}
+                  {accessibilityOk || !isNative ? "All Good" : "Review"}
                 </span>
               </div>
-              <span className="text-[10px] text-slate-400 leading-tight block mt-0.5">
-                {isNative ? "Accessibility & Overlay" : "Device & Permissions"}
+              <span className="text-[10px] text-slate-400 leading-tight block mt-0.5 group-hover:text-cyan-300 transition-colors">
+                Accessibility & Overlay
               </span>
             </div>
           </button>
 
-          {/* API Key Card */}
+          {/* API Key Card -> Opens API Key Modal */}
           <button
             onClick={onOpenApiKeyModal}
             className={`p-3.5 rounded-2xl border backdrop-blur-md text-left flex flex-col justify-between transition-all group ${
@@ -129,7 +209,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           >
             <div className="flex items-center justify-between mb-2">
               <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                className={`w-9 h-9 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform ${
                   isKeyConfigured
                     ? "bg-cyan-500/20 border border-cyan-500/40 text-cyan-300"
                     : "bg-amber-500/20 border border-amber-500/40 text-amber-300"
@@ -161,37 +241,53 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </button>
         </div>
 
-        {/* HERO CARD: MAYA AI CORE */}
-        <div className="relative rounded-3xl p-6 bg-gradient-to-b from-[#060b18] via-[#091326] to-[#040814] border border-cyan-500/30 shadow-[0_12px_45px_rgba(6,182,212,0.2)] text-center overflow-hidden mb-6">
+        {/* HERO CARD: MAYA AI CORE WITH RGB VISUALIZER ORB (STAYS ON HOME SCREEN!) */}
+        <div className="relative rounded-3xl p-5 bg-gradient-to-b from-[#060b18] via-[#091326] to-[#040814] border border-cyan-500/30 shadow-[0_12px_45px_rgba(6,182,212,0.2)] text-center overflow-hidden mb-6">
           <div className="absolute -top-12 -left-12 w-36 h-36 bg-cyan-500/20 rounded-full blur-3xl pointer-events-none" />
           <div className="absolute -bottom-12 -right-12 w-36 h-36 bg-pink-500/20 rounded-full blur-3xl pointer-events-none" />
 
-          {/* Glowing Animated Core with "M" Logo */}
-          <div className="relative mx-auto w-32 h-32 mb-4 flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-cyan-500 via-blue-500 to-pink-500 opacity-60 blur-md animate-pulse" />
-            <div className="absolute inset-1 rounded-full border border-cyan-400/60 animate-spin [animation-duration:12s]" />
-            <div className="absolute inset-3 rounded-full border border-pink-400/40 animate-spin [animation-duration:8s] [animation-direction:reverse]" />
-
-            <div className="relative w-24 h-24 rounded-full bg-gradient-to-b from-[#0b1730] to-[#030611] border-2 border-cyan-300/80 shadow-[0_0_25px_rgba(6,182,212,0.6)] flex items-center justify-center">
-              <span className="font-['Space_Grotesk'] text-4xl font-extrabold bg-gradient-to-tr from-cyan-300 via-white to-pink-400 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(6,182,212,0.8)]">
-                M
-              </span>
-            </div>
+          {/* DYNAMIC CHROMATIC RGB VISUALIZER ORB */}
+          <div className="py-2">
+            <RGBVisualizerOrb
+              state={state}
+              emotion={emotion}
+              analyser={analyser}
+              onToggle={onToggleStartMaya}
+              activeActionText={activeActionText}
+            />
           </div>
 
-          <h2 className="text-xl font-bold text-white tracking-tight">Maya AI Core</h2>
-          <p className="text-xs text-slate-400 mt-1 mb-5">
+          <h2 className="text-lg font-bold text-white tracking-tight mt-1">Maya AI Core</h2>
+          <p className="text-[11px] text-slate-400 mt-0.5 mb-3">
             Your intelligent companion and phone controller
           </p>
 
-          {/* LARGE PLAY BUTTON: START MAYA */}
-          <button
-            onClick={onStartMaya}
-            className="w-full max-w-xs mx-auto py-3.5 px-6 rounded-full bg-gradient-to-r from-pink-500 via-rose-500 to-fuchsia-600 hover:from-pink-400 hover:to-fuchsia-500 text-white font-bold text-sm tracking-wide shadow-[0_0_25px_rgba(244,63,94,0.5)] hover:shadow-[0_0_35px_rgba(244,63,94,0.7)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-          >
-            <Play className="w-4 h-4 fill-white" />
-            <span>START MAYA</span>
-          </button>
+          {/* LIVE DIALOGUE & CAPTIONS CAPSULE (DIRECTLY ON HOME SCREEN - NO FULLSCREEN CALL POPUP!) */}
+          {isLive ? (
+            <div className="w-full mt-2 p-3 rounded-2xl bg-black/60 border border-cyan-500/30 text-left space-y-1.5 shadow-inner">
+              {userSpeech && (
+                <div className="text-xs text-pink-300 flex items-start gap-1.5">
+                  <span className="font-bold shrink-0">You:</span>
+                  <span className="italic">{userSpeech}</span>
+                </div>
+              )}
+              {assistantSpeech ? (
+                <div className="text-xs text-cyan-200 flex items-start gap-1.5">
+                  <span className="font-bold text-cyan-400 shrink-0">Maya:</span>
+                  <span className="leading-relaxed">{assistantSpeech}</span>
+                </div>
+              ) : (
+                <div className="text-[11px] text-cyan-400/80 animate-pulse flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>Listening to your voice... Speak in Hindi, Hinglish, or English</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="w-full mt-2 py-2 px-3 rounded-2xl bg-white/[0.03] border border-white/5 text-center text-[11px] text-slate-400">
+              💡 Tap the <strong className="text-rose-400">START</strong> button below or tap the Orb to begin speaking!
+            </div>
+          )}
         </div>
 
         {/* QUICK ACTIONS SECTION */}

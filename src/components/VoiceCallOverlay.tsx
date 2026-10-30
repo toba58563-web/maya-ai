@@ -49,7 +49,7 @@ export const VoiceCallOverlay: React.FC<VoiceCallOverlayProps> = ({
           <ZaraAvatar size="sm" isOnline={true} />
           <div>
             <h2 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
-              <span>Zara AI Call</span>
+              <span>Maya AI Call</span>
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
             </h2>
             <div className="text-[11px] text-cyan-300 flex items-center gap-1 font-medium">
@@ -116,7 +116,7 @@ export const VoiceCallOverlay: React.FC<VoiceCallOverlayProps> = ({
           onClick={onInterrupt}
           disabled={state !== "speaking"}
           className="w-14 h-14 rounded-full bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 text-slate-200 flex items-center justify-center transition-all disabled:opacity-30 disabled:pointer-events-none"
-          title="Interrupt Zara"
+          title="Interrupt Maya"
         >
           <Volume2 className="w-5 h-5" />
         </button>

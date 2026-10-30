@@ -34,58 +34,38 @@ Always respond in valid JSON with:
 
 export async function processMayaCommand(
   userText: string,
-  apiKey: string,
+  apiKey?: string,
   userAddress: string = "Boss"
 ): Promise<MayaAIPlanResult> {
-  const trimmedKey = apiKey.trim();
+  const trimmedKey = apiKey?.trim();
 
-  // Try direct Google Cloud Gemini API call if key is present (works standalone in APK with no server needed)
-  if (trimmedKey) {
-    try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${encodeURIComponent(
-        trimmedKey
-      )}`;
+  // Call server-side Gemini 3.8 endpoint (handles process.env.GEMINI_API_KEY with optional client key override)
+  try {
+    const response = await fetch("/api/maya-command", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(trimmedKey ? { "x-gemini-api-key": trimmedKey } : {}),
+      },
+      body: JSON.stringify({
+        text: userText,
+        userAddress,
+        apiKey: trimmedKey || undefined,
+      }),
+    });
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: SYSTEM_PROMPT }],
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `User address: "${userAddress}". User command in Hindi/Hinglish/English: "${userText}". Output JSON.`,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.7,
-          },
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "{}";
-        const parsed = JSON.parse(rawJson);
-
-        return {
-          speechReply: parsed.speechReply || `Right away, ${userAddress}!`,
-          emotion: parsed.emotion || "warm",
-          actions: parsed.actions || [],
-          isSensitiveConfirmationNeeded: Boolean(parsed.isSensitiveConfirmationNeeded),
-          confirmationMessage: parsed.confirmationMessage || undefined,
-        };
-      }
-    } catch (e) {
-      console.warn("Direct Gemini Cloud API fallback to local parser:", e);
+    if (response.ok) {
+      const parsed = await response.json();
+      return {
+        speechReply: parsed.speechReply || `Right away, ${userAddress}!`,
+        emotion: parsed.emotion || "warm",
+        actions: parsed.actions || [],
+        isSensitiveConfirmationNeeded: Boolean(parsed.isSensitiveConfirmationNeeded),
+        confirmationMessage: parsed.confirmationMessage || undefined,
+      };
     }
+  } catch (e) {
+    console.warn("Server maya-command unavailable, using local intent fallback:", e);
   }
 
   // Fallback to local rule-based intent parser for offline / basic commands

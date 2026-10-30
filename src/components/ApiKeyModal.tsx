@@ -30,7 +30,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
     onSaveKey(inputVal.trim());
     setTestResult({
       status: "success",
-      message: "API Key saved successfully! Zara is ready.",
+      message: "API Key saved successfully! Maya is ready.",
     });
     setTimeout(() => {
       onClose();
@@ -58,21 +58,23 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
       });
 
       const data = await res.json();
+
       if (res.ok && data.success) {
         setTestResult({
           status: "success",
-          message: "Connection verified! Gemini model is responding.",
+          message: data.message || "Connection verified! Gemini is connected and active.",
         });
       } else {
+        const errorMsg = data.error || "Invalid API key or quota limit reached.";
         setTestResult({
           status: "error",
-          message: data.error || "Failed to connect with this key.",
+          message: errorMsg,
         });
       }
     } catch (e: any) {
       setTestResult({
         status: "error",
-        message: e.message || "Network test failed.",
+        message: e?.message || "Network error. Please check your connection.",
       });
     } finally {
       setIsTesting(false);
@@ -125,7 +127,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
         <div className="p-3 rounded-2xl bg-cyan-950/40 border border-cyan-800/40 text-xs text-cyan-200/90 mb-4 flex items-start gap-2.5">
           <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            Your API key is saved locally in your browser session. It directly unlocks Zara's real-time multimodal audio and chat.
+            Your API key is saved locally in your device Keystore. It directly unlocks Maya's real-time multimodal audio, chat, and phone control.
           </p>
         </div>
 

@@ -43,6 +43,9 @@ export interface AppSettings {
   hapticFeedback: boolean;
   customApiKey: string;
   selectedModel: string;
+  personality: "Girlfriend Mode" | "Assistant Mode" | "Professional Mode";
+  wakeWordEnabled: boolean;
+  userName: string;
   addressStyle: string; // e.g. "Boss"
   greetingStyle: string;
   autoListen: boolean;
