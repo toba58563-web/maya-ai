@@ -17,7 +17,7 @@ import {
   Settings as SettingsIcon,
   X,
 } from "lucide-react";
-import { MayaPhoneControlBridge } from "../utils/mayaPhoneControl";
+import { MayaPhoneControlBridge, MayaPermissionsMap } from "../utils/mayaPhoneControl";
 
 interface PermissionsManagerProps {
   isOpen: boolean;
@@ -28,8 +28,8 @@ export const PermissionsManager: React.FC<PermissionsManagerProps> = ({
   isOpen,
   onClose,
 }) => {
-  const [permStates, setPermStates] = useState({
-    microphone: true,
+  const [permStates, setPermStates] = useState<MayaPermissionsMap>({
+    microphone: false,
     notifications: false,
     overlay: false,
     accessibility: false,
@@ -44,42 +44,10 @@ export const PermissionsManager: React.FC<PermissionsManagerProps> = ({
     defaultAssistant: false,
   });
 
-  const isNative = MayaPhoneControlBridge.isNative();
-
   const refreshPermissions = async () => {
     try {
-      const acc = await MayaPhoneControlBridge.isAccessibilityEnabled();
-      const ov = await MayaPhoneControlBridge.isOverlayPermissionGranted();
-
-      let mic = true;
-      if (navigator.permissions && navigator.permissions.query) {
-        try {
-          const micStatus = await navigator.permissions.query({ name: "microphone" as any });
-          mic = micStatus.state === "granted";
-        } catch {}
-      }
-
-      let notif = false;
-      if ("Notification" in window) {
-        notif = Notification.permission === "granted";
-      }
-
-      let loc = false;
-      if (navigator.permissions && navigator.permissions.query) {
-        try {
-          const locStatus = await navigator.permissions.query({ name: "geolocation" as any });
-          loc = locStatus.state === "granted";
-        } catch {}
-      }
-
-      setPermStates((prev) => ({
-        ...prev,
-        accessibility: acc || !isNative,
-        overlay: ov || !isNative,
-        microphone: mic,
-        notifications: notif,
-        location: loc,
-      }));
+      const perms = await MayaPhoneControlBridge.checkAllPermissions();
+      setPermStates(perms);
     } catch (e) {
       console.warn("Permissions check error:", e);
     }
@@ -95,171 +63,115 @@ export const PermissionsManager: React.FC<PermissionsManagerProps> = ({
 
   const grantedCount = Object.values(permStates).filter(Boolean).length;
 
-  const handleRequestMicrophone = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      setPermStates((prev) => ({ ...prev, microphone: true }));
-    } catch {
-      alert("Please allow microphone access in device or browser settings.");
-    }
-  };
-
-  const handleRequestNotifications = async () => {
-    if ("Notification" in window) {
-      const res = await Notification.requestPermission();
-      setPermStates((prev) => ({ ...prev, notifications: res === "granted" }));
-    }
-  };
-
-  const handleRequestLocation = () => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        () => setPermStates((prev) => ({ ...prev, location: true })),
-        () => alert("Please allow location access in your device settings.")
-      );
-    }
-  };
-
-  const handleRequestCamera = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ video: true });
-      setPermStates((prev) => ({ ...prev, camera: true }));
-    } catch {
-      alert("Please allow camera access in your device settings.");
-    }
-  };
-
-  const handleRequestAccessibility = async () => {
-    await MayaPhoneControlBridge.openAccessibilitySettings();
-    setTimeout(refreshPermissions, 1000);
-  };
-
-  const handleRequestOverlay = async () => {
-    await MayaPhoneControlBridge.requestOverlayPermission();
-    setTimeout(refreshPermissions, 1000);
-  };
-
-  const handleToggle = (key: keyof typeof permStates) => {
-    setPermStates((prev) => ({ ...prev, [key]: !prev[key] }));
+  const handleRequestPermission = async (id: string) => {
+    await MayaPhoneControlBridge.requestSystemPermission(id);
+    setTimeout(refreshPermissions, 1200);
   };
 
   const PERMISSION_ITEMS = [
     {
-      id: "microphone" as const,
+      id: "microphone",
       name: "Microphone",
       status: permStates.microphone,
       desc: "Required to hear your voice commands.",
       code: "android.permission.RECORD_AUDIO",
       icon: Mic,
-      onAction: handleRequestMicrophone,
     },
     {
-      id: "notifications" as const,
+      id: "notifications",
       name: "Notifications",
       status: permStates.notifications,
       desc: "Required to keep the assistant running in background.",
       code: "android.permission.POST_NOTIFICATIONS",
       icon: Bell,
-      onAction: handleRequestNotifications,
     },
     {
-      id: "overlay" as const,
+      id: "overlay",
       name: "Overlay / Display Over Apps",
       status: permStates.overlay,
       desc: "Required to show the assistant UI / floating orb over other apps.",
       code: "android.permission.SYSTEM_ALERT_WINDOW",
       icon: Layers,
-      onAction: handleRequestOverlay,
     },
     {
-      id: "accessibility" as const,
+      id: "accessibility",
       name: "Accessibility Service",
       status: permStates.accessibility,
       desc: "Required to automate tasks and interact with screen.",
       code: "ACCESSIBILITY_SERVICE",
       icon: Smartphone,
-      onAction: handleRequestAccessibility,
     },
     {
-      id: "battery" as const,
+      id: "battery",
       name: "Battery Optimization",
       status: permStates.battery,
       desc: "Required to prevent the system from killing background service.",
       code: "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
       icon: BatteryCharging,
-      onAction: () => handleToggle("battery"),
     },
     {
-      id: "location" as const,
+      id: "location",
       name: "Location",
       status: permStates.location,
       desc: "Required for weather and location-based queries.",
       code: "android.permission.ACCESS_FINE_LOCATION",
       icon: MapPin,
-      onAction: handleRequestLocation,
     },
     {
-      id: "camera" as const,
+      id: "camera",
       name: "Camera",
       status: permStates.camera,
       desc: "Required for visual capabilities and scanning.",
       code: "android.permission.CAMERA",
       icon: Camera,
-      onAction: handleRequestCamera,
     },
     {
-      id: "storage" as const,
+      id: "storage",
       name: "Storage / Media",
       status: permStates.storage,
       desc: "Required to save memories and files.",
       code: "android.permission.READ_MEDIA_AUDIO",
       icon: FolderArchive,
-      onAction: () => handleToggle("storage"),
     },
     {
-      id: "contacts" as const,
+      id: "contacts",
       name: "Contacts",
       status: permStates.contacts,
       desc: "Required to find contact names when calling or messaging.",
       code: "android.permission.READ_CONTACTS",
       icon: Users,
-      onAction: () => handleToggle("contacts"),
     },
     {
-      id: "phone" as const,
+      id: "phone",
       name: "Phone",
       status: permStates.phone,
       desc: "Required to initiate phone calls directly via voice.",
       code: "android.permission.CALL_PHONE",
       icon: Phone,
-      onAction: () => handleToggle("phone"),
     },
     {
-      id: "sms" as const,
+      id: "sms",
       name: "SMS (Send & Read)",
       status: permStates.sms,
       desc: "Required to send and read text messages via voice.",
       code: "android.permission.SEND_SMS",
       icon: MessageSquare,
-      onAction: () => handleToggle("sms"),
     },
     {
-      id: "notificationAccess" as const,
+      id: "notificationAccess",
       name: "Notification Access",
       status: permStates.notificationAccess,
       desc: "Required to read incoming WhatsApp and social messages aloud.",
       code: "NOTIFICATION_LISTENER_SERVICE",
       icon: Radio,
-      onAction: () => handleToggle("notificationAccess"),
     },
     {
-      id: "defaultAssistant" as const,
+      id: "defaultAssistant",
       name: "Default Digital Assistant",
       status: permStates.defaultAssistant,
       desc: "Set MAYA as your phone's default voice assistant app.",
       code: "VOICE_INTERACTION_SERVICE",
       icon: Sparkles,
-      onAction: () => handleToggle("defaultAssistant"),
     },
   ];
 
@@ -276,7 +188,7 @@ export const PermissionsManager: React.FC<PermissionsManagerProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded-full bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -292,7 +204,7 @@ export const PermissionsManager: React.FC<PermissionsManagerProps> = ({
           </div>
           <button
             onClick={() => MayaPhoneControlBridge.openAccessibilitySettings()}
-            className="px-3 py-1 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-bold"
+            className="px-3 py-1 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-bold cursor-pointer"
           >
             Settings
           </button>
@@ -331,8 +243,8 @@ export const PermissionsManager: React.FC<PermissionsManagerProps> = ({
                 </div>
 
                 <button
-                  onClick={item.onAction}
-                  className="w-9 h-9 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0 active:scale-95 transition-all"
+                  onClick={() => handleRequestPermission(item.id)}
+                  className="w-9 h-9 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0 active:scale-95 transition-all cursor-pointer"
                   title={`Configure ${item.name}`}
                 >
                   <SettingsIcon className="w-4 h-4" />

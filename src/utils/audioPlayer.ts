@@ -148,129 +148,15 @@ export class AudioPlayer {
   }
 
   /**
-   * Speak using browser neural speech synthesis with natural female voice
+   * Phone/browser TTS is completely disabled per user requirement.
+   * Real Gemini WebSocket 24kHz PCM stream is the exclusive audio source.
    */
-  public async speakBrowserTts(
-    text: string,
-    options: { pitch?: number; rate?: number; preferredVoiceName?: string } = {}
-  ): Promise<void> {
-    this.stop();
-
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return Promise.resolve();
-    }
-
-    await this.resume();
-
-    return new Promise((resolve) => {
-      // Small tick after cancel to ensure browser audio pipeline is cleared
-      setTimeout(() => {
-        try {
-          // Clean clean text from emoticons or stage cues like *chuckles*
-          const cleanText = text.replace(/\*[^*]+\*/g, "").trim();
-          if (!cleanText) {
-            this.isPlaying = false;
-            this.onPlaybackStateChange?.(false);
-            resolve();
-            return;
-          }
-
-          const utterance = new SpeechSynthesisUtterance(cleanText);
-          this.activeUtterance = utterance; // Prevent garbage collection in Chrome
-
-          utterance.pitch = options.pitch ?? 1.15; // Slightly higher pitch for sweet female friend
-          utterance.rate = options.rate ?? 1.0;
-
-          const voices =
-            this.cachedVoices.length > 0 ? this.cachedVoices : window.speechSynthesis.getVoices();
-
-          let chosenVoice: SpeechSynthesisVoice | undefined;
-
-          if (options.preferredVoiceName) {
-            chosenVoice = voices.find((v) => v.name === options.preferredVoiceName);
-          }
-
-          if (!chosenVoice) {
-            // Prioritize natural warm female voices across platforms
-            const femaleVoiceNames = [
-              "Google UK English Female",
-              "Google US English",
-              "Samantha",
-              "Victoria",
-              "Karen",
-              "Moira",
-              "Tessa",
-              "Microsoft Jenny Online (Natural) - English (United States)",
-              "Microsoft Zira - English (United States)",
-              "Microsoft Aria Online (Natural) - English (United States)",
-            ];
-
-            for (const name of femaleVoiceNames) {
-              const match = voices.find((v) =>
-                v.name.toLowerCase().includes(name.toLowerCase())
-              );
-              if (match) {
-                chosenVoice = match;
-                break;
-              }
-            }
-          }
-
-          // If still not found, find any English voice with female hint or en-US
-          if (!chosenVoice) {
-            chosenVoice =
-              voices.find(
-                (v) =>
-                  v.lang.startsWith("en") &&
-                  (v.name.toLowerCase().includes("female") ||
-                    v.name.toLowerCase().includes("girl"))
-              ) ||
-              voices.find((v) => v.lang.startsWith("en")) ||
-              voices[0];
-          }
-
-          if (chosenVoice) {
-            utterance.voice = chosenVoice;
-          }
-
-          utterance.onstart = () => {
-            this.isPlaying = true;
-            this.onPlaybackStateChange?.(true);
-          };
-
-          utterance.onend = () => {
-            if (this.activeUtterance === utterance) {
-              this.isPlaying = false;
-              this.activeUtterance = null;
-              this.onPlaybackStateChange?.(false);
-            }
-            resolve();
-          };
-
-          utterance.onerror = (e) => {
-            // "interrupted" or "canceled" are standard user interruption events
-            if (this.activeUtterance === utterance) {
-              this.isPlaying = false;
-              this.activeUtterance = null;
-              this.onPlaybackStateChange?.(false);
-            }
-            resolve();
-          };
-
-          window.speechSynthesis.speak(utterance);
-        } catch (e) {
-          this.isPlaying = false;
-          this.activeUtterance = null;
-          this.onPlaybackStateChange?.(false);
-          resolve();
-        }
-      }, 30);
-    });
+  public async speakBrowserTts(): Promise<void> {
+    return Promise.resolve();
   }
 
-  public getAvailableVoices(): SpeechSynthesisVoice[] {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
-    return this.cachedVoices.length > 0 ? this.cachedVoices : window.speechSynthesis.getVoices();
+  public getAvailableVoices(): any[] {
+    return [];
   }
 }
 

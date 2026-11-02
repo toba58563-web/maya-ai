@@ -31,7 +31,53 @@ class MayaAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Track state changes if needed
+        // Passive accessibility event listener.
+        // Unsolicited automated background clicking (including automatic ad-skipping) is strictly removed.
+        // Maya only executes user-requested, explicitly confirmed actions.
+    }
+
+    /**
+     * Tap first video result in YouTube to automatically start playing the requested song
+     */
+    fun clickFirstYouTubeVideo(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        var clicked = false
+
+        fun searchVideoNode(node: AccessibilityNodeInfo?): Boolean {
+            if (node == null || clicked) return false
+            val viewId = node.viewIdResourceName?.lowercase() ?: ""
+            val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+
+            val isVideoItem = (viewId.contains("thumbnail") || viewId.contains("video_info") ||
+                    viewId.contains("metadata") || desc.contains("views") || desc.contains("ago") ||
+                    desc.contains("duration")) &&
+                    (node.isClickable || node.parent?.isClickable == true)
+
+            if (isVideoItem) {
+                val targetNode = if (node.isClickable) node else node.parent
+                clicked = targetNode?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                if (clicked) {
+                    Log.i(TAG, "⚡ Maya clicked first YouTube video to start playing!")
+                    return true
+                }
+            }
+
+            for (i in 0 until node.childCount) {
+                if (searchVideoNode(node.getChild(i))) return true
+            }
+            return false
+        }
+
+        searchVideoNode(root)
+
+        if (!clicked) {
+            // Coordinate fallback for standard screen top search result
+            val displayMetrics = resources.displayMetrics
+            val x = displayMetrics.widthPixels * 0.5f
+            val y = displayMetrics.heightPixels * 0.38f
+            clicked = clickCoordinates(x, y)
+        }
+        return clicked
     }
 
     override fun onInterrupt() {
@@ -49,12 +95,34 @@ class MayaAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Safely obtain the root AccessibilityNodeInfo, checking active window or windows list
+     */
+    private fun getRootNodeSafe(): AccessibilityNodeInfo? {
+        rootInActiveWindow?.let { return it }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                for (window in windows) {
+                    if (window.isFocused || window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        window.root?.let { return it }
+                    }
+                }
+                for (window in windows) {
+                    window.root?.let { return it }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error querying windows: ${e.message}")
+            }
+        }
+        return null
+    }
+
+    /**
      * Tap element by visible text, content description, or view ID.
      * Climbs up to clickable parent if target node is not clickable directly.
      */
     fun tapElement(target: String): Boolean {
         if (isStopRequested) return false
-        val root = rootInActiveWindow ?: return false
+        val root = getRootNodeSafe() ?: return false
 
         val targetLower = target.lowercase().trim()
         val matchingNodes = mutableListOf<AccessibilityNodeInfo>()
@@ -83,7 +151,7 @@ class MayaAccessibilityService : AccessibilityService() {
                 if (curr.isClickable) {
                     val success = curr.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     Log.i(TAG, "Clicked node: target=$target, success=$success")
-                    return success
+                    if (success) return true
                 }
                 curr = curr.parent
             }
@@ -91,8 +159,14 @@ class MayaAccessibilityService : AccessibilityService() {
             // Fallback: click by node screen coordinates
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            if (rect.width() > 0 && rect.height() > 0) {
-                return clickCoordinates(rect.centerX().toFloat(), rect.centerY().toFloat())
+            val dm = resources.displayMetrics
+            if (rect.width() > 0 && rect.height() > 0 &&
+                rect.centerX() in 0..dm.widthPixels && rect.centerY() in 0..dm.heightPixels) {
+                val clicked = clickCoordinates(rect.centerX().toFloat(), rect.centerY().toFloat())
+                if (clicked) {
+                    Log.i(TAG, "Clicked coordinates: x=${rect.centerX()}, y=${rect.centerY()}")
+                    return true
+                }
             }
         }
 
@@ -100,47 +174,62 @@ class MayaAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Scroll list or screen up or down
+     * Scroll list or screen: supports "down", "up", "left", and "right"
      */
     fun scrollScreen(direction: String): Boolean {
         if (isStopRequested) return false
-        val root = rootInActiveWindow ?: return false
+        val root = getRootNodeSafe()
+        val dir = direction.lowercase().trim()
 
-        val isDown = direction.equals("down", ignoreCase = true)
-        val action = if (isDown) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        val isDown = dir == "down"
+        val isUp = dir == "up"
+        val isLeft = dir == "left"
+        val isRight = dir == "right"
 
-        var targetNode: AccessibilityNodeInfo? = null
+        // For vertical scrolling, try node action first
+        if (root != null && (isDown || isUp)) {
+            val action = if (isDown) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            var targetNode: AccessibilityNodeInfo? = null
 
-        fun findScrollable(node: AccessibilityNodeInfo?) {
-            if (node == null || targetNode != null) return
-            if (node.isScrollable) {
-                targetNode = node
-                return
+            fun findScrollable(node: AccessibilityNodeInfo?) {
+                if (node == null || targetNode != null) return
+                if (node.isScrollable) {
+                    targetNode = node
+                    return
+                }
+                for (i in 0 until node.childCount) {
+                    findScrollable(node.getChild(i))
+                }
             }
-            for (i in 0 until node.childCount) {
-                findScrollable(node.getChild(i))
+
+            findScrollable(root)
+            val scrolled = targetNode?.performAction(action) ?: false
+            if (scrolled) {
+                Log.i(TAG, "Scrolled via AccessibilityNodeInfo action: dir=$dir")
+                return true
             }
         }
 
-        findScrollable(root)
+        // Gesture-based scroll fallback (handles down, up, left, right)
+        val displayMetrics = resources.displayMetrics
+        val width = displayMetrics.widthPixels.toFloat()
+        val height = displayMetrics.heightPixels.toFloat()
 
-        return targetNode?.performAction(action) ?: run {
-            // Fallback scroll gesture
-            val displayMetrics = resources.displayMetrics
-            val width = displayMetrics.widthPixels.toFloat()
-            val height = displayMetrics.heightPixels.toFloat()
-            val startY = if (isDown) height * 0.75f else height * 0.25f
-            val endY = if (isDown) height * 0.25f else height * 0.75f
-            swipeCoordinates(width / 2f, startY, width / 2f, endY)
+        return when {
+            isDown -> swipeCoordinates(width / 2f, height * 0.75f, width / 2f, height * 0.25f)
+            isUp -> swipeCoordinates(width / 2f, height * 0.25f, width / 2f, height * 0.75f)
+            isLeft -> swipeCoordinates(width * 0.8f, height / 2f, width * 0.2f, height / 2f)
+            isRight -> swipeCoordinates(width * 0.2f, height / 2f, width * 0.8f, height / 2f)
+            else -> swipeCoordinates(width / 2f, height * 0.75f, width / 2f, height * 0.25f)
         }
     }
 
     /**
-     * Type text into an active or matching editable field
+     * Type text into an active or matching editable field and verify
      */
     fun enterText(text: String, targetField: String? = null): Boolean {
         if (isStopRequested) return false
-        val root = rootInActiveWindow ?: return false
+        val root = getRootNodeSafe() ?: return false
 
         var targetNode: AccessibilityNodeInfo? = null
 
@@ -176,13 +265,13 @@ class MayaAccessibilityService : AccessibilityService() {
 
         val node = targetNode ?: return false
 
-        // Focus and set text
+        // Focus field
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-        Log.i(TAG, "Entered text: success=$success")
+        Log.i(TAG, "Entered text via ACTION_SET_TEXT: success=$success")
         return success
     }
 
@@ -190,8 +279,12 @@ class MayaAccessibilityService : AccessibilityService() {
      * Read all visible text and interactable element labels on screen
      */
     fun readScreenContent(): List<String> {
-        val root = rootInActiveWindow ?: return emptyList()
+        val root = getRootNodeSafe() ?: return emptyList()
         val content = mutableListOf<String>()
+        val pkg = root.packageName?.toString() ?: ""
+        if (pkg.isNotBlank()) {
+            content.add("[Active App: $pkg]")
+        }
 
         fun extractText(node: AccessibilityNodeInfo?) {
             if (node == null) return
@@ -216,6 +309,13 @@ class MayaAccessibilityService : AccessibilityService() {
         return content.distinct()
     }
 
+    /**
+     * Get active application package name
+     */
+    fun getActiveAppPackage(): String {
+        return getRootNodeSafe()?.packageName?.toString() ?: ""
+    }
+
     private fun clickCoordinates(x: Float, y: Float): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         val path = Path().apply { moveTo(x, y) }
@@ -230,7 +330,7 @@ class MayaAccessibilityService : AccessibilityService() {
             moveTo(startX, startY)
             lineTo(endX, endY)
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 300)
+        val stroke = GestureDescription.StrokeDescription(path, 0, 250)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         return dispatchGesture(gesture, null, null)
     }

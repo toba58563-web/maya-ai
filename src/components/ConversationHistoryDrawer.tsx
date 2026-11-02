@@ -24,11 +24,8 @@ export const ConversationHistoryDrawer: React.FC<ConversationHistoryDrawerProps>
     if (msg.audioBase64) {
       try {
         await audioPlayer.playPcmBase64(msg.audioBase64);
-        return;
       } catch {}
     }
-    // Fallback to browser TTS
-    audioPlayer.speakBrowserTts(msg.text, { preferredVoiceName: preferredVoice });
   };
 
   return (

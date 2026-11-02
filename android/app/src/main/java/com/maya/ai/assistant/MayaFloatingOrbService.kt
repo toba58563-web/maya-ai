@@ -7,12 +7,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -24,6 +26,7 @@ import androidx.core.app.NotificationCompat
 class MayaFloatingOrbService : Service() {
 
     companion object {
+        private const val TAG = "MayaFloatingOrbService"
         const val ACTION_START = "com.maya.ai.assistant.START_ORB"
         const val ACTION_STOP = "com.maya.ai.assistant.STOP_ORB"
         const val ACTION_UPDATE_STATE = "com.maya.ai.assistant.UPDATE_ORB_STATE"
@@ -36,6 +39,7 @@ class MayaFloatingOrbService : Service() {
         const val STATE_ERROR = "ERROR"
         const val STATE_IDLE = "IDLE"
 
+        @Volatile
         var isRunning = false
             private set
     }
@@ -50,142 +54,162 @@ class MayaFloatingOrbService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        isRunning = true
         createNotificationChannel()
         val notification = createNotification("Maya Floating Assistant is active")
-        startForeground(1001, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(1001, notification)
+            }
+            isRunning = true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground for orb: ${e.message}")
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                removeOrbView()
                 stopSelf()
+                isRunning = false
                 return START_NOT_STICKY
             }
             ACTION_UPDATE_STATE -> {
                 val newState = intent.getStringExtra(EXTRA_STATE) ?: STATE_IDLE
                 updateOrbVisualState(newState)
+                return START_NOT_STICKY
             }
             else -> {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
                     initFloatingOrb()
+                } else {
+                    Log.w(TAG, "Overlay permission not granted; cannot display floating orb.")
+                    stopSelf()
                 }
+                return START_NOT_STICKY
             }
         }
-        return START_STICKY
     }
 
     private fun initFloatingOrb() {
         if (orbView != null) return
 
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-
-        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Overlay permission revoked. Stopping orb service.")
+            stopSelf()
+            return
         }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 30
-            y = 200
-        }
-
-        val density = resources.displayMetrics.density
-        val orbSizePx = (64 * density).toInt()
-
-        // Root container
-        val rootLayout = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-        }
-
-        // Glowing outer circle
-        val orbContainer = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(orbSizePx, orbSizePx)
-            elevation = 12 * density
-        }
-
-        // Inner glowing core
-        innerCoreView = View(this).apply {
-            val innerSize = (52 * density).toInt()
-            layoutParams = FrameLayout.LayoutParams(innerSize, innerSize).apply {
-                gravity = Gravity.CENTER
-            }
-            background = createOrbDrawable(Color.parseColor("#06B6D4"), Color.parseColor("#3B82F6"))
-        }
-
-        // Monogram text in orb
-        statusTextView = TextView(this).apply {
-            text = "M"
-            textSize = 22f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-        }
-
-        orbContainer.addView(innerCoreView)
-        orbContainer.addView(statusTextView)
-        rootLayout.addView(orbContainer)
-
-        // Drag and tap logic
-        rootLayout.setOnTouchListener(object : View.OnTouchListener {
-            private var initialX = 0
-            private var initialY = 0
-            private var initialTouchX = 0f
-            private var initialTouchY = 0f
-            private var isClick = true
-
-            override fun onTouch(v: View?, event: MotionEvent): Boolean {
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        initialX = params.x
-                        initialY = params.y
-                        initialTouchX = event.rawX
-                        initialTouchY = event.rawY
-                        isClick = true
-                        return true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = event.rawX - initialTouchX
-                        val dy = event.rawY - initialTouchY
-                        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-                            isClick = false
-                        }
-                        params.x = initialX + dx.toInt()
-                        params.y = initialY + dy.toInt()
-                        windowManager?.updateViewLayout(rootLayout, params)
-                        return true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        if (isClick) {
-                            // Tapped orb: bring Maya to foreground
-                            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            }
-                            if (launchIntent != null) {
-                                startActivity(launchIntent)
-                            }
-                        }
-                        return true
-                    }
-                }
-                return false
-            }
-        })
-
-        orbView = rootLayout
         try {
+            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 30
+                y = 200
+            }
+
+            val density = resources.displayMetrics.density
+            val orbSizePx = (64 * density).toInt()
+
+            val rootLayout = FrameLayout(this).apply {
+                layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+            }
+
+            val orbContainer = FrameLayout(this).apply {
+                layoutParams = FrameLayout.LayoutParams(orbSizePx, orbSizePx)
+                elevation = 12 * density
+            }
+
+            innerCoreView = View(this).apply {
+                val innerSize = (52 * density).toInt()
+                layoutParams = FrameLayout.LayoutParams(innerSize, innerSize).apply {
+                    gravity = Gravity.CENTER
+                }
+                background = createOrbDrawable(Color.parseColor("#06B6D4"), Color.parseColor("#3B82F6"))
+            }
+
+            statusTextView = TextView(this).apply {
+                text = "M"
+                textSize = 22f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            }
+
+            orbContainer.addView(innerCoreView)
+            orbContainer.addView(statusTextView)
+            rootLayout.addView(orbContainer)
+
+            rootLayout.setOnTouchListener(object : View.OnTouchListener {
+                private var initialX = 0
+                private var initialY = 0
+                private var initialTouchX = 0f
+                private var initialTouchY = 0f
+                private var isClick = true
+
+                override fun onTouch(v: View?, event: MotionEvent): Boolean {
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            initialX = params.x
+                            initialY = params.y
+                            initialTouchX = event.rawX
+                            initialTouchY = event.rawY
+                            isClick = true
+                            return true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = event.rawX - initialTouchX
+                            val dy = event.rawY - initialTouchY
+                            if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                                isClick = false
+                            }
+                            params.x = initialX + dx.toInt()
+                            params.y = initialY + dy.toInt()
+                            try {
+                                windowManager?.updateViewLayout(rootLayout, params)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "updateViewLayout error: ${e.message}")
+                            }
+                            return true
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if (isClick) {
+                                val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                                }
+                                if (launchIntent != null) {
+                                    startActivity(launchIntent)
+                                }
+                            }
+                            return true
+                        }
+                    }
+                    return false
+                }
+            })
+
+            orbView = rootLayout
             windowManager?.addView(orbView, params)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to initialize and add floating orb view: ${e.message}", e)
+            orbView = null
         }
     }
 
@@ -239,16 +263,20 @@ class MayaFloatingOrbService : Service() {
             .build()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        isRunning = false
+    private fun removeOrbView() {
         if (orbView != null) {
             try {
                 windowManager?.removeView(orbView)
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.w(TAG, "Failed to remove orb view: ${e.message}")
             }
             orbView = null
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        isRunning = false
+        removeOrbView()
     }
 }

@@ -18,6 +18,7 @@ import { ChatScreen } from "./components/ChatScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { ApiKeyModal } from "./components/ApiKeyModal";
 import { PermissionsManager } from "./components/PermissionsManager";
+import { MandatoryPermissionFlow } from "./components/MandatoryPermissionFlow";
 import { BottomNavBar } from "./components/BottomNavBar";
 import { ConversationHistoryDrawer } from "./components/ConversationHistoryDrawer";
 import {
@@ -25,6 +26,7 @@ import {
   MayaPhoneAction,
 } from "./utils/mayaPhoneControl";
 import { processMayaCommand } from "./utils/geminiDirectApi";
+import { ApiKeyManager } from "./utils/apiKeyManager";
 
 const INITIAL_PROFILE: UserProfile = {
   name: "Boss",
@@ -107,6 +109,7 @@ const DEFAULT_SAMPLE_MESSAGES: MessageItem[] = [
 export default function App() {
   // Navigation & Screen Modals
   const [showSplash, setShowSplash] = useState(true);
+  const [showMandatoryFlow, setShowMandatoryFlow] = useState(false);
   const [activeTab, setActiveTab] = useState<NavTab>("home");
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
@@ -217,13 +220,13 @@ export default function App() {
         if (newStatus === "speaking") {
           setState("speaking");
           MayaPhoneControlBridge.updateOrbVisual("SPEAKING");
-        } else if (newStatus === "listening") {
+        } else if (newStatus === "listening" || newStatus === "ready") {
           setState("listening");
           MayaPhoneControlBridge.updateOrbVisual("LISTENING");
-        } else if (newStatus === "connecting") {
+        } else if (newStatus === "connecting" || newStatus === "waiting_setup" || newStatus === "thinking" || newStatus === "reconnecting") {
           setState("thinking");
           MayaPhoneControlBridge.updateOrbVisual("THINKING");
-        } else if (newStatus === "disconnected") {
+        } else if (newStatus === "disconnected" || newStatus === "error") {
           setState("offline");
           MayaPhoneControlBridge.updateOrbVisual("IDLE");
         }
@@ -263,7 +266,11 @@ export default function App() {
       },
       onError: (err) => {
         console.warn("Maya Live error:", err);
+        geminiLive.stopPlayback();
+        setState("offline");
         MayaPhoneControlBridge.updateOrbVisual("ERROR");
+        const errMsg = typeof err === "string" ? err : err?.message || "Gemini Live encountered an error.";
+        setAssistantSpeech(`Connection error: ${errMsg}. Tap Start to retry.`);
       },
     });
   }, []);
@@ -277,11 +284,86 @@ export default function App() {
 
     try {
       switch (action.type) {
-        case "launchApp":
-          if (action.packageName) {
-            await MayaPhoneControlBridge.launchApp(action.packageName);
+        case "playYouTube":
+          await MayaPhoneControlBridge.playYouTube(action.query || "trending music");
+          break;
+        case "autoSkipAd":
+          await MayaPhoneControlBridge.autoSkipAd();
+          break;
+        case "call":
+          if (action.number || action.target) {
+            await MayaPhoneControlBridge.makePhoneCall(action.number || action.target || "");
           }
           break;
+        case "sms":
+          await MayaPhoneControlBridge.sendSms(
+            action.number || action.target || "",
+            action.message || action.text || "Hello from Maya AI"
+          );
+          break;
+        case "email":
+          await MayaPhoneControlBridge.sendEmail(
+            action.to || "",
+            action.subject || "Regarding Maya AI",
+            action.body || action.text || ""
+          );
+          break;
+        case "readNotifications":
+          const notifs = await MayaPhoneControlBridge.getRecentNotifications();
+          const isGfMode = settingsRef.current.personality === "Girlfriend Mode";
+          if (notifs && notifs.length > 0) {
+            const summary = notifs
+              .slice(0, 3)
+              .map((n) => `${n.appName}: ${n.title} - ${n.text}`)
+              .join(". ");
+            const speech = isGfMode
+              ? `Aapke naye notifications aaye hain jaan: ${summary}`
+              : `Boss, here are your latest notifications: ${summary}`;
+            setAssistantSpeech(speech);
+            if (geminiLive.getIsConnected()) {
+              geminiLive.sendTextMessage(
+                isGfMode
+                  ? `Read these notifications lovingly without calling user Boss: ${summary}`
+                  : `Tell Boss about these notifications: ${summary}`
+              );
+            }
+          } else {
+            const speech = isGfMode
+              ? `Abhi koi naya notification nahi hai jaan, sab clear hai!`
+              : `No unread notifications right now, Boss! Everything is quiet.`;
+            setAssistantSpeech(speech);
+            if (geminiLive.getIsConnected()) {
+              geminiLive.sendTextMessage(
+                isGfMode
+                  ? "Tell user lovingly that there are no unread notifications without saying Boss."
+                  : "Tell Boss cheerfully that they have no unread notifications."
+              );
+            }
+          }
+          break;
+        case "launchApp": {
+          const appTarget = action.packageName || action.appName || action.target || "";
+          if (appTarget) {
+            const launched = await MayaPhoneControlBridge.launchApp(appTarget);
+            if (!launched) {
+              const isGf = settingsRef.current.personality === "Girlfriend Mode";
+              const failureMsg = isGf
+                ? `Jaan, "${appTarget}" aapke phone me installed nahi mila.`
+                : `Boss, "${appTarget}" is not installed on this device.`;
+              setAssistantSpeech(failureMsg);
+            }
+          }
+          break;
+        }
+        case "mediaControl": {
+          const cmd = action.mediaCommand || action.target || "playPause";
+          await MayaPhoneControlBridge.controlMedia(cmd);
+          break;
+        }
+        case "stop": {
+          await MayaPhoneControlBridge.stop();
+          break;
+        }
         case "tap":
           if (action.target) {
             await MayaPhoneControlBridge.tap(action.target);
@@ -295,10 +377,31 @@ export default function App() {
             await MayaPhoneControlBridge.typeText(action.text, action.target);
           }
           break;
-        case "readScreen":
-          const content = await MayaPhoneControlBridge.readScreen();
-          console.log("Screen content read:", content);
+        case "readScreen": {
+          const details = await MayaPhoneControlBridge.getScreenDetails();
+          const isGf = settingsRef.current.personality === "Girlfriend Mode";
+          if (details && details.elements && details.elements.length > 0) {
+            const topItems = details.elements.slice(0, 4).join(", ");
+            const summary = `Current app: ${details.packageName || "Unknown"}. Visible elements: ${topItems}`;
+            const speech = isGf
+              ? `Main dekh rahi hoon jaan, screen par yeh dikh raha hai: ${topItems}`
+              : `Boss, on your screen: ${summary}`;
+            setAssistantSpeech(speech);
+            if (geminiLive.getIsConnected()) {
+              geminiLive.sendTextMessage(
+                isGf
+                  ? `Explain what is on the phone screen lovingly without saying Boss: ${summary}`
+                  : `Report screen contents to Boss: ${summary}`
+              );
+            }
+          } else {
+            const speech = isGf
+              ? `Screen par abhi koi text ya button nahi dikh raha hai jaan.`
+              : `No interactable elements found on the current screen, Boss.`;
+            setAssistantSpeech(speech);
+          }
           break;
+        }
       }
     } catch (e) {
       console.error("Action execution error:", e);
@@ -345,6 +448,7 @@ export default function App() {
               message: text,
               history: messagesRef.current.slice(-6).map((m) => ({ role: m.role, text: m.text })),
               userProfile: profile,
+              personality: settingsRef.current.personality || "Girlfriend Mode",
               apiKey: settingsRef.current.customApiKey || undefined,
             }),
           });
@@ -355,11 +459,16 @@ export default function App() {
           console.warn("Server chat fetch error:", chatErr);
         }
 
+        const isGf = settingsRef.current.personality === "Girlfriend Mode";
+        const userTitle = isGf
+          ? (profile.name && profile.name !== "Boss" ? profile.name : "Jaan")
+          : (profile.name || "Boss");
+
         // Process structured phone commands via server-side /api/maya-command
         const plan = await processMayaCommand(
           text,
           settingsRef.current.customApiKey,
-          profile.name || "Boss"
+          userTitle
         );
 
         const replyText =
@@ -382,21 +491,12 @@ export default function App() {
         setMessages((prev) => [...prev, assistantMsg]);
         setAssistantSpeech(replyText);
 
-        // Speak reply out loud if WebSocket is not handling it directly
-        if (!geminiLive.getIsConnected()) {
-          setState("speaking");
-          await MayaPhoneControlBridge.updateOrbVisual("SPEAKING");
-          try {
-            audioPlayer.speakBrowserTts(replyText, { pitch: 1.15, rate: 1.0 });
-          } catch {}
-          setTimeout(() => {
-            if (stateRef.current === "speaking") {
-              setState("listening");
-              MayaPhoneControlBridge.updateOrbVisual("LISTENING");
-            }
-          }, 3500);
+        // Audio is handled by real Gemini WebSocket
+        if (geminiLive.getIsConnected()) {
+          geminiLive.sendTextMessage(text);
         } else {
           setState("listening");
+          await MayaPhoneControlBridge.updateOrbVisual("LISTENING");
         }
 
         // Handle structured phone actions
@@ -476,6 +576,10 @@ export default function App() {
       speechService.stopListening();
       audioPlayer.stop();
       geminiLive.disconnect();
+      if (MayaPhoneControlBridge.isNative()) {
+        await MayaPhoneControlBridge.stop();
+        await MayaPhoneControlBridge.stopForegroundService();
+      }
       setState("offline");
       setUserSpeech("");
       setAssistantSpeech("");
@@ -486,6 +590,28 @@ export default function App() {
 
     // IF NOT RUNNING -> START MAYA ON HOME SCREEN
     try {
+      // 1. Verify API Key
+      const keyStatus = ApiKeyManager.getCurrentStatus(settingsRef.current.customApiKey || "");
+      if (keyStatus.status === "missing") {
+        setActiveTab("home");
+        setShowApiKeyModal(true);
+        setAssistantSpeech("Please configure your Gemini API Key in Settings to start Maya.");
+        return;
+      }
+
+      // 2. Verify Microphone Permission
+      if (MayaPhoneControlBridge.isNative()) {
+        const micGranted = await MayaPhoneControlBridge.requestSystemPermission("microphone");
+        if (!micGranted) {
+          setState("offline");
+          setAssistantSpeech("Microphone permission is required to listen to your voice.");
+          return;
+        }
+
+        // Start native Android Foreground Service for persistent background voice operation
+        await MayaPhoneControlBridge.startForegroundService();
+      }
+
       if (settingsRef.current.soundEffects) {
         soundEffects.playWakeUp();
       }
@@ -496,36 +622,44 @@ export default function App() {
       setAssistantSpeech("Connecting to Maya AI...");
       await MayaPhoneControlBridge.updateOrbVisual("THINKING");
 
-      // Attempt WebSocket Live if backend exists, or fallback directly to client speechService
-      let liveConnected = false;
+      // Connect to Gemini Live (Sole voice engine - NO speechService fallback)
       try {
         await geminiLive.connect(
           settingsRef.current.customApiKey || undefined,
           settingsRef.current.preferredVoiceName || "Aoede",
           settingsRef.current.personality || "Girlfriend Mode"
         );
-        liveConnected = true;
-        const greetingPrompt = `Say a short, cheerful 1-sentence greeting to ${
-          profile.name || "Boss"
-        } as Maya in your warm ${settingsRef.current.preferredVoiceName || "Aoede"} voice.`;
+        const isGf = settingsRef.current.personality === "Girlfriend Mode";
+        const isProf = settingsRef.current.personality === "Professional Mode";
+        const greetingPrompt = isGf
+          ? `Say a short, sweet, deeply affectionate 1-sentence greeting to your user as their girlfriend Maya (do NOT say Boss, address as Jaan or speak naturally) in your warm ${
+              settingsRef.current.preferredVoiceName || "Aoede"
+            } voice.`
+          : isProf
+          ? `Say a short, confident, professional 1-sentence greeting to Boss as Maya in your ${
+              settingsRef.current.preferredVoiceName || "Aoede"
+            } voice.`
+          : `Say a short, cheerful 1-sentence greeting to ${
+              profile.name || "Boss"
+            } as Maya.`;
         geminiLive.sendTextMessage(greetingPrompt);
-      } catch (wsErr) {
-        console.warn("WebSocket Live unavailable, using Standalone SpeechService:", wsErr);
-      }
-
-      if (!liveConnected) {
-        await speechService.startListening();
-        setState("listening");
-        await MayaPhoneControlBridge.updateOrbVisual("LISTENING");
-        const greeting = `Hey ${profile.name || "Boss"}! Maya is active and listening for your voice or phone command.`;
-        setAssistantSpeech(greeting);
-        audioPlayer.speakBrowserTts(greeting);
+      } catch (wsErr: any) {
+        console.warn("Gemini Live connection failure:", wsErr);
+        geminiLive.disconnect();
+        if (MayaPhoneControlBridge.isNative()) {
+          await MayaPhoneControlBridge.stopForegroundService();
+        }
+        setState("offline");
+        await MayaPhoneControlBridge.updateOrbVisual("ERROR");
+        const errMsg = wsErr?.message || "Connection failed. Please check internet connection and API Key.";
+        setAssistantSpeech(`Gemini Live Disconnected: ${errMsg}`);
+        return;
       }
     } catch (err: any) {
       console.error("Failed to start Maya:", err);
       setState("offline");
       await MayaPhoneControlBridge.updateOrbVisual("ERROR");
-      alert("Please grant microphone permission to talk with Maya.");
+      setAssistantSpeech("Failed to start: " + (err.message || "Please check permissions and API key."));
     }
   }, [profile.name]);
 
@@ -542,6 +676,49 @@ export default function App() {
     MayaPhoneControlBridge.stop();
   };
 
+  // Verify the 4 mandatory permissions (Microphone, Notifications, Accessibility, Overlay)
+  const verifyMandatoryPermissions = useCallback(
+    async (andStartMaya?: boolean) => {
+      try {
+        const map = await MayaPhoneControlBridge.checkAllPermissions();
+        const allFour = Boolean(
+          map.microphone && map.notifications && map.accessibility && map.overlay
+        );
+        if (!allFour) {
+          setShowMandatoryFlow(true);
+        } else {
+          setShowMandatoryFlow(false);
+          if (andStartMaya) {
+            handleToggleMaya();
+          }
+        }
+      } catch (e) {
+        console.warn("verifyMandatoryPermissions error:", e);
+      }
+    },
+    [handleToggleMaya]
+  );
+
+  // Re-check on focus/resume to detect if any permission was revoked
+  useEffect(() => {
+    const handleRecheck = () => {
+      if (!showSplash) {
+        verifyMandatoryPermissions();
+      }
+    };
+
+    window.addEventListener("focus", handleRecheck);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && !showSplash) {
+        handleRecheck();
+      }
+    });
+
+    return () => {
+      window.removeEventListener("focus", handleRecheck);
+    };
+  }, [showSplash, verifyMandatoryPermissions]);
+
   const handleQuickAction = (prompt: string) => {
     setActiveTab("chat");
     handleSendMessage(prompt);
@@ -553,98 +730,153 @@ export default function App() {
       <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[500px] h-[500px] bg-cyan-500/10 rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-10 right-0 w-[400px] h-[400px] bg-pink-500/10 rounded-full blur-[140px] pointer-events-none" />
 
-      {/* LUXURY CYBERPUNK SPLASH SCREEN ON LAUNCH */}
-      {showSplash && (
+      {/* 1. LUXURY CYBERPUNK SPLASH SCREEN ON LAUNCH */}
+      {showSplash ? (
         <SplashScreen
-          onDismiss={() => setShowSplash(false)}
+          onDismiss={() => {
+            setShowSplash(false);
+            verifyMandatoryPermissions();
+          }}
           onQuickStart={() => {
             setShowSplash(false);
-            handleToggleMaya();
+            verifyMandatoryPermissions(true);
           }}
         />
-      )}
+      ) : showMandatoryFlow ? (
+        /* 2, 3, 4, 5. MANDATORY PERMISSION FLOW (Microphone -> Notifications -> Accessibility -> Overlay) */
+        <MandatoryPermissionFlow
+          onComplete={() => {
+            setShowMandatoryFlow(false);
+          }}
+        />
+      ) : (
+        /* 6. MAYA MAIN APPLICATION (Home, Chat, Settings, History) */
+        <>
+          {/* SCREEN CONTAINER */}
+          <div className="relative z-10 flex-1 flex flex-col w-full h-full">
+            {activeTab === "home" && (
+              <HomeScreen
+                settings={settings}
+                profile={profile}
+                state={state}
+                emotion={emotion}
+                analyser={geminiLive.getAnalyser() || audioPlayer.getAnalyser()}
+                userSpeech={userSpeech}
+                assistantSpeech={assistantSpeech}
+                activeActionText={
+                  activeAction ? activeAction.description || activeAction.type : undefined
+                }
+                onToggleStartMaya={handleToggleMaya}
+                onOpenApiKeyModal={() => setShowApiKeyModal(true)}
+                onOpenPermissionsModal={() => setShowPermissionsModal(true)}
+                onQuickAction={handleQuickAction}
+                onOpenSettings={() => setActiveTab("settings")}
+              />
+            )}
 
-      {/* SCREEN CONTAINER */}
-      <div className="relative z-10 flex-1 flex flex-col w-full h-full">
-        {activeTab === "home" && (
-          <HomeScreen
-            settings={settings}
-            profile={profile}
-            state={state}
-            emotion={emotion}
-            analyser={geminiLive.getAnalyser() || audioPlayer.getAnalyser()}
-            userSpeech={userSpeech}
-            assistantSpeech={assistantSpeech}
-            activeActionText={activeAction ? activeAction.description || activeAction.type : undefined}
-            onToggleStartMaya={handleToggleMaya}
-            onOpenApiKeyModal={() => setShowApiKeyModal(true)}
-            onOpenPermissionsModal={() => setShowPermissionsModal(true)}
-            onQuickAction={handleQuickAction}
-            onOpenSettings={() => setActiveTab("settings")}
-          />
-        )}
+            {activeTab === "chat" && (
+              <ChatScreen
+                messages={messages}
+                onSendMessage={handleSendMessage}
+                onBack={() => setActiveTab("home")}
+                onStartCall={handleToggleMaya}
+                state={state}
+                activeAction={activeAction}
+                pendingConfirmation={pendingConfirmation}
+                onConfirmAction={handleConfirmAction}
+                onCancelAction={handleCancelAction}
+              />
+            )}
 
-        {activeTab === "chat" && (
-          <ChatScreen
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            onBack={() => setActiveTab("home")}
-            onStartCall={handleToggleMaya}
-            state={state}
-            activeAction={activeAction}
-            pendingConfirmation={pendingConfirmation}
-            onConfirmAction={handleConfirmAction}
-            onCancelAction={handleCancelAction}
-          />
-        )}
+            {activeTab === "settings" && (
+              <SettingsScreen
+                settings={settings}
+                profile={profile}
+                onUpdateSettings={(newSettings) => {
+                  setSettings((prev) => {
+                    const updated = { ...prev, ...newSettings };
+                    // If personality or voice changed and Gemini Live is currently connected, re-initialize session!
+                    if (
+                      (newSettings.personality && newSettings.personality !== prev.personality) ||
+                      (newSettings.preferredVoiceName &&
+                        newSettings.preferredVoiceName !== prev.preferredVoiceName)
+                    ) {
+                      if (geminiLive.getIsConnected()) {
+                        geminiLive
+                          .updateSessionConfig(
+                            updated.customApiKey,
+                            updated.preferredVoiceName,
+                            updated.personality
+                          )
+                          .then(() => {
+                            const isGf = updated.personality === "Girlfriend Mode";
+                            const isProf = updated.personality === "Professional Mode";
+                            const confirmSpeech = isGf
+                              ? "Haan jaan, ab main tumhari sweet girlfriend mode me hoon! ❤️"
+                              : isProf
+                              ? "Professional Mode active, Boss. Ready for your instructions. 👑"
+                              : "Assistant Mode activated.";
+                            setAssistantSpeech(confirmSpeech);
+                            geminiLive.sendTextMessage(
+                              isGf
+                                ? "Say lovingly to your user without calling them Boss that you are now in Girlfriend Mode: 'Haan jaan, ab main tumhari sweet girlfriend mode me hoon! Batao kya baat karni hai?'"
+                                : isProf
+                                ? "Confirm concisely to Boss that Professional Mode is active: 'Professional Mode active, Boss. Ready for your instructions.'"
+                                : "Say Assistant Mode is active."
+                            );
+                          })
+                          .catch((reErr) => {
+                            console.warn("Live session config update error:", reErr);
+                          });
+                      }
+                    }
+                    return updated;
+                  });
+                }}
+                onUpdateProfile={(newProfile) =>
+                  setProfile((prev) => ({ ...prev, ...newProfile }))
+                }
+                onOpenApiKeyModal={() => setShowApiKeyModal(true)}
+                onOpenPermissionsModal={() => setShowPermissionsModal(true)}
+                onBack={() => setActiveTab("home")}
+              />
+            )}
 
-        {activeTab === "settings" && (
-          <SettingsScreen
-            settings={settings}
-            profile={profile}
-            onUpdateSettings={(newSettings) =>
-              setSettings((prev) => ({ ...prev, ...newSettings }))
-            }
-            onUpdateProfile={(newProfile) =>
-              setProfile((prev) => ({ ...prev, ...newProfile }))
-            }
-            onOpenApiKeyModal={() => setShowApiKeyModal(true)}
-            onOpenPermissionsModal={() => setShowPermissionsModal(true)}
-            onBack={() => setActiveTab("home")}
-          />
-        )}
-
-        {activeTab === "history" && (
-          <div className="flex-1 flex flex-col p-5 max-w-md mx-auto w-full">
-            <h2 className="text-xl font-bold text-white mb-2">Conversation History</h2>
-            <p className="text-xs text-slate-400 mb-4">Past conversations with Maya</p>
-            <div className="flex-1 overflow-y-auto space-y-3 pb-24">
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className="p-3.5 rounded-2xl bg-[#0c1324] border border-white/10 text-xs"
-                >
-                  <div className="flex items-center justify-between text-[11px] mb-1 font-semibold">
-                    <span className={m.role === "user" ? "text-pink-400" : "text-cyan-400"}>
-                      {m.role === "user" ? "You" : "Maya"}
-                    </span>
-                    <span className="text-slate-500">{m.timestamp}</span>
-                  </div>
-                  <p className="text-slate-300">{m.text}</p>
+            {activeTab === "history" && (
+              <div className="flex-1 flex flex-col p-5 max-w-md mx-auto w-full">
+                <h2 className="text-xl font-bold text-white mb-2">Conversation History</h2>
+                <p className="text-xs text-slate-400 mb-4">Past conversations with Maya</p>
+                <div className="flex-1 overflow-y-auto space-y-3 pb-24">
+                  {messages.map((m) => (
+                    <div
+                      key={m.id}
+                      className="p-3.5 rounded-2xl bg-[#0c1324] border border-white/10 text-xs"
+                    >
+                      <div className="flex items-center justify-between text-[11px] mb-1 font-semibold">
+                        <span
+                          className={m.role === "user" ? "text-pink-400" : "text-cyan-400"}
+                        >
+                          {m.role === "user" ? "You" : "Maya"}
+                        </span>
+                        <span className="text-slate-500">{m.timestamp}</span>
+                      </div>
+                      <p className="text-slate-300">{m.text}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* BOTTOM NAVIGATION BAR WITH USER-REQUESTED START / STOP BUTTON */}
-      <BottomNavBar
-        activeTab={activeTab}
-        onSelectTab={(tab) => setActiveTab(tab)}
-        onToggleStartStop={handleToggleMaya}
-        state={state}
-      />
+          {/* BOTTOM NAVIGATION BAR WITH USER-REQUESTED START / STOP BUTTON */}
+          <BottomNavBar
+            activeTab={activeTab}
+            onSelectTab={(tab) => setActiveTab(tab)}
+            onToggleStartStop={handleToggleMaya}
+            state={state}
+          />
+        </>
+      )}
 
       {/* PERMISSIONS HUB MODAL */}
       <PermissionsManager

@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for Maya AI complete functionality repair: real API key connection validation, native Kotlin AudioRecord/AudioTrack engine, direct Gemini Live WebSocket streaming with user key, real Android permission inspection for all 13 permissions, voice and personality persistence, and physical APK reliability.",
+  "updatedAt":  "2026-10-30T15:56:12.315894039Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

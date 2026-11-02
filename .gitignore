@@ -6,17 +6,3 @@ coverage/
 *.log
 .env*
 !.env.example
-
-# Secrets and local configuration
-.env
-.env.*
-!.env.example
-local.properties
-*.jks
-*.keystore
-
-# Build outputs and dependencies
-node_modules/
-dist/
-android/.gradle/
-android/**/build/

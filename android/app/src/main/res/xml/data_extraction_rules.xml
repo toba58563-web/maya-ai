@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Exclude sensitive Keystore preferences from Cloud backup -->
+        <exclude domain="sharedpref" path="maya_secure_encrypted_prefs.xml"/>
+    </cloud-backup>
+    <device-transfer>
+        <!-- Exclude sensitive Keystore preferences from Device-to-Device transfer -->
+        <exclude domain="sharedpref" path="maya_secure_encrypted_prefs.xml"/>
+    </device-transfer>
+</data-extraction-rules>

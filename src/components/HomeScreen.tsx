@@ -20,9 +20,10 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { AppSettings, UserProfile, AssistantState, AssistantEmotion } from "../types";
-import { MayaPhoneControlBridge } from "../utils/mayaPhoneControl";
+import { MayaPhoneControlBridge, MayaPermissionsMap } from "../utils/mayaPhoneControl";
 import { RGBVisualizerOrb } from "./RGBVisualizerOrb";
 import { fetchLiveLocationWeather, WeatherData } from "../utils/weatherService";
+import { ApiKeyManager, ApiKeyVerificationState } from "../utils/apiKeyManager";
 
 interface HomeScreenProps {
   settings: AppSettings;
@@ -55,13 +56,28 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onQuickAction,
   onOpenSettings,
 }) => {
-  // Ready by default through server-side Gemini key with optional custom key override
-  const isKeyConfigured = true;
-  const userName = profile.name || "Boss";
+  // Real API Key verification state
+  const [keyState, setKeyState] = useState<ApiKeyVerificationState>(() =>
+    ApiKeyManager.getCurrentStatus(settings.customApiKey || "")
+  );
+
+  // Real Android permissions map
+  const [permissionsMap, setPermissionsMap] = useState<MayaPermissionsMap | null>(null);
+
   const isNative = MayaPhoneControlBridge.isNative();
 
-  const [accessibilityOk, setAccessibilityOk] = useState(false);
-  const [overlayOk, setOverlayOk] = useState(false);
+  useEffect(() => {
+    setKeyState(ApiKeyManager.getCurrentStatus(settings.customApiKey || ""));
+  }, [settings.customApiKey]);
+
+  useEffect(() => {
+    MayaPhoneControlBridge.checkAllPermissions().then(setPermissionsMap);
+  }, []);
+
+  const grantedCount = permissionsMap
+    ? Object.values(permissionsMap).filter(Boolean).length
+    : 0;
+  const isPermissionsAllGood = grantedCount >= 4; // Core permissions
 
   // Dynamic Location Weather State
   const [weather, setWeather] = useState<WeatherData>({
@@ -95,10 +111,28 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
   useEffect(() => {
     if (isNative) {
-      MayaPhoneControlBridge.isAccessibilityEnabled().then(setAccessibilityOk);
-      MayaPhoneControlBridge.isOverlayPermissionGranted().then(setOverlayOk);
+      MayaPhoneControlBridge.checkAllPermissions().then(setPermissionsMap);
     }
   }, [isNative]);
+
+  const isGirlfriend = settings.personality === "Girlfriend Mode";
+  const isProfessional = settings.personality === "Professional Mode";
+
+  const displayName = isGirlfriend
+    ? (profile?.name && profile.name !== "Boss" ? profile.name : profile?.nickname || "Jaan")
+    : (profile?.name || settings.userName || "Boss");
+
+  const greetingTitle = isGirlfriend
+    ? `Hello, ${displayName}`
+    : `Hello, ${displayName}`;
+
+  const greetingSubtitle = isGirlfriend
+    ? "Bas tumhara intezaar kar rahi thi. Batao, aaj ka din kaisa raha?"
+    : isProfessional
+    ? "All systems operational and ready. Standing by for your instructions, Boss."
+    : "I'm Maya, your AI companion and phone assistant. How can I help you today?";
+
+  const greetingEmoji = isGirlfriend ? "❤️" : isProfessional ? "👑" : "✨";
 
   const renderWeatherIcon = () => {
     if (weather.loading) {
@@ -161,10 +195,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         {/* GREETING TITLE */}
         <div className="mb-5">
           <h1 className="text-3xl font-extrabold text-white tracking-tight flex items-center gap-2">
-            Hello, {userName} <span className="text-2xl">👑</span>
+            {greetingTitle} <span className="text-2xl">{greetingEmoji}</span>
           </h1>
           <p className="text-xs text-slate-300 mt-1.5 leading-relaxed font-normal">
-            I'm Maya, your AI companion and phone assistant. How can I help you today?
+            {greetingSubtitle}
           </p>
         </div>
 
@@ -173,13 +207,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           {/* System & Permissions Card -> Opens Permissions Hub */}
           <button
             onClick={onOpenPermissionsModal}
-            className="p-3.5 rounded-2xl bg-[#0f172a]/80 hover:bg-[#131f38] border border-white/10 text-left backdrop-blur-md flex flex-col justify-between shadow-sm transition-all group"
+            className="p-3.5 rounded-2xl bg-[#0f172a]/80 hover:bg-[#131f38] border border-white/10 text-left backdrop-blur-md flex flex-col justify-between shadow-sm transition-all group cursor-pointer"
           >
             <div className="flex items-center justify-between mb-2">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform">
+              <div
+                className={`w-9 h-9 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform ${
+                  isPermissionsAllGood
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                    : "bg-amber-500/15 border border-amber-500/30 text-amber-400"
+                }`}
+              >
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              {accessibilityOk || !isNative ? (
+              {isPermissionsAllGood ? (
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
               ) : (
                 <AlertCircle className="w-4 h-4 text-amber-400 animate-pulse" />
@@ -188,39 +228,49 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <div>
               <div className="text-xs font-bold text-white flex items-center gap-1.5">
                 <span>Permissions</span>
-                <span className="text-[10px] font-normal text-emerald-400">
-                  {accessibilityOk || !isNative ? "All Good" : "Review"}
+                <span
+                  className={`text-[10px] font-semibold ${
+                    isPermissionsAllGood ? "text-emerald-400" : "text-amber-400"
+                  }`}
+                >
+                  {isPermissionsAllGood ? "All Good" : `${grantedCount}/13 Active`}
                 </span>
               </div>
               <span className="text-[10px] text-slate-400 leading-tight block mt-0.5 group-hover:text-cyan-300 transition-colors">
-                Accessibility & Overlay
+                {grantedCount} of 13 Granted
               </span>
             </div>
           </button>
 
-          {/* API Key Card -> Opens API Key Modal */}
+          {/* API Key Card -> Opens API Key Modal with TRUTHFUL Status */}
           <button
             onClick={onOpenApiKeyModal}
-            className={`p-3.5 rounded-2xl border backdrop-blur-md text-left flex flex-col justify-between transition-all group ${
-              isKeyConfigured
+            className={`p-3.5 rounded-2xl border backdrop-blur-md text-left flex flex-col justify-between transition-all group cursor-pointer ${
+              keyState.status === "connected"
                 ? "bg-[#0c1e3a]/80 border-cyan-500/40 hover:border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
-                : "bg-[#2a1b10]/80 border-amber-500/40 hover:border-amber-400"
+                : keyState.status === "unverified"
+                ? "bg-[#2a1e10]/80 border-amber-500/40 hover:border-amber-400"
+                : "bg-[#251016]/80 border-rose-500/40 hover:border-rose-400"
             }`}
           >
             <div className="flex items-center justify-between mb-2">
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform ${
-                  isKeyConfigured
+                  keyState.status === "connected"
                     ? "bg-cyan-500/20 border border-cyan-500/40 text-cyan-300"
-                    : "bg-amber-500/20 border border-amber-500/40 text-amber-300"
+                    : keyState.status === "unverified"
+                    ? "bg-amber-500/20 border border-amber-500/40 text-amber-300"
+                    : "bg-rose-500/20 border border-rose-500/40 text-rose-300"
                 }`}
               >
                 <Key className="w-5 h-5" />
               </div>
-              {isKeyConfigured ? (
+              {keyState.status === "connected" ? (
                 <CheckCircle2 className="w-4 h-4 text-cyan-400" />
-              ) : (
+              ) : keyState.status === "unverified" ? (
                 <AlertCircle className="w-4 h-4 text-amber-400 animate-pulse" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 animate-pulse" />
               )}
             </div>
             <div>
@@ -228,14 +278,30 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 <span>API Key</span>
                 <span
                   className={`text-[10px] font-semibold ${
-                    isKeyConfigured ? "text-cyan-400" : "text-amber-400"
+                    keyState.status === "connected"
+                      ? "text-cyan-400"
+                      : keyState.status === "unverified"
+                      ? "text-amber-400"
+                      : "text-rose-400"
                   }`}
                 >
-                  {isKeyConfigured ? "Connected" : "Configure"}
+                  {keyState.status === "connected"
+                    ? "Connected"
+                    : keyState.status === "unverified"
+                    ? "Not Verified"
+                    : keyState.status === "failed"
+                    ? "Connection Failed"
+                    : "API Key Missing"}
                 </span>
               </div>
               <span className="text-[10px] text-slate-400 leading-tight block mt-0.5 group-hover:text-cyan-300 transition-colors">
-                {isKeyConfigured ? "Gemini Ready" : "Tap to set key"}
+                {keyState.status === "connected"
+                  ? "Gemini Ready"
+                  : keyState.status === "unverified"
+                  ? "Test in Settings"
+                  : keyState.status === "failed"
+                  ? "Check key in Settings"
+                  : "Tap to set key"}
               </span>
             </div>
           </button>
@@ -258,9 +324,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </div>
 
           <h2 className="text-lg font-bold text-white tracking-tight mt-1">Maya AI Core</h2>
-          <p className="text-[11px] text-slate-400 mt-0.5 mb-3">
-            Your intelligent companion and phone controller
-          </p>
+          <div className="flex items-center justify-center gap-1.5 mt-0.5 mb-3">
+            {isLive ? (
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Live Voice &amp; Background Active
+              </span>
+            ) : (
+              <span className="text-[11px] text-slate-400">
+                Your intelligent companion and phone controller
+              </span>
+            )}
+          </div>
 
           {/* LIVE DIALOGUE & CAPTIONS CAPSULE (DIRECTLY ON HOME SCREEN - NO FULLSCREEN CALL POPUP!) */}
           {isLive ? (
@@ -282,6 +357,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <span>Listening to your voice... Speak in Hindi, Hinglish, or English</span>
                 </div>
               )}
+            </div>
+          ) : assistantSpeech ? (
+            <div className="w-full mt-2 p-3 rounded-2xl bg-rose-950/40 border border-rose-500/40 text-left space-y-2 shadow-inner">
+              <div className="text-xs text-rose-200 flex items-start gap-1.5">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span className="leading-relaxed font-medium">{assistantSpeech}</span>
+              </div>
+              <button
+                onClick={onToggleStartMaya}
+                className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Retry Gemini Live Connection</span>
+              </button>
             </div>
           ) : (
             <div className="w-full mt-2 py-2 px-3 rounded-2xl bg-white/[0.03] border border-white/5 text-center text-[11px] text-slate-400">
